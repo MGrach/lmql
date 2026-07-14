@@ -35,7 +35,7 @@ import re
 # These are the ONLY words that become clause boundaries,
 # and only when they appear at bracket/parenthesis depth 0.
 # Naming a Python variable  after any of these at top level is a
-# deliberately) reserved-word collision.
+# deliberate reserved-word collision.
 # ---------------------------------------------------------------------------
 
 DECODERS = frozenset({"argmax",
@@ -255,13 +255,14 @@ def _scan_string(src: str, qpos: int, start: int) -> int:
                      )
 
 
-def tokenize(src: str, *, strict: bool = False) -> List[LMQLToken]:
+def lex_tokenize(src: str, *, strict: bool = False) -> List[LMQLToken]:
     """
     Lex `src` into a flat lmqltoken stream with depth-0 keyword resolution.
 
-    With ``strict=True``, also run :func:`check_reserved_collisions` and raise a
-    rendered :class:`LexError` on the first error-level collision (e.g. a decoder
-    keyword used as a variable name). The parser pipeline should pass strict=True.
+    With ``strict=True``,
+    also run :func:`check_reserved_collisions` and raise a rendered :class:`LexError`
+    on the first error-level collision (e.g. a decoder keyword used as a variable name).
+    The parser pipeline should pass strict=True.
     callers that only want raw lmqltokens leave it False (the default).
     """
     toks: List[LMQLToken] = []
@@ -281,8 +282,7 @@ def tokenize(src: str, *, strict: bool = False) -> List[LMQLToken]:
 
         # newline (significant only for error positions)
         if c == "\n":
-            toks.append(
-                LMQLToken(LMQLTokenType.NEWLINE, "\n", i, i + 1, depth))
+            toks.append(LMQLToken(LMQLTokenType.NEWLINE, "\n", i, i + 1, depth))
             i += 1
             continue
 
@@ -537,7 +537,7 @@ def check_reserved_collisions(src: str) -> List[Diagnostic]:
     (callers decide what to do (the parser pipeline calls
     tokenize(src, strict=True) to turn these fatal).
     """
-    return _collisions(tokenize(src), src)
+    return _collisions(lex_tokenize(src), src)
 
 
 def format_tokens(toks: List[LMQLToken]) -> str:

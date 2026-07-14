@@ -8,7 +8,7 @@ and slices the source text into one span per clause:
 
     query := prologue decoder? prompt fromclause? whereclause? distribution?
 
-It then hands each span to its leaf sublanguage :
+It then hands each span to its leaf sublanguage:
 
     decoder       -> ast.parse            (a bare Name like `argmax`, or a Call)
     prompt        -> ast.parse            (Python statements, after dedent)
@@ -18,16 +18,15 @@ It then hands each span to its leaf sublanguage :
 
 Design notes vs. the original ``fragment_parser.py``
 ----------------------------------------------------
-* Boundaries are not a state machine.
+* Boundaries are not a state machine anymore.
     The lexer types a CLAUSE_KEYWORD as ``KEYWORD`` only at depth 0,
     so finding boundaries is a single scan for depth-0 ``KEYWORD`` tokens.
     Nesting can never be mistaken for a boundary.
 * The parser accumulates *source spans* (byte offsets),
     not token lists, and feeds the original substring to each leaf parser.
-    Because nothing is ever untokenized, the original's
-    ``double_escape`` / ``double_unescape`` and
-    The NAME+STRING prefix-merging heuristic are removed.
-* There is NO inline ``where`` / ``distribution`` form.
+    Because nothing is ever untokenized, the original's ``double_escape`` /
+    ``double_unescape`` and NAME+STRING prefix-merging heuristic are removed.
+* There is NO inline ``where`` / ``distribution`` form. (design decision)
     Every depth-0 ``where`` or ``distribution`` keyword is a clause boundary
     The original ``inline_where_transform`` / ``inline_distribution_transform`` are deleted.
 * ``from`` is the one ambiguous keyword (clause vs. ``from ... import ...``).
@@ -37,7 +36,8 @@ Design notes vs. the original ``fragment_parser.py``
 
 Typing
 ``prologue`` and ``prompt`` are always produced and are therefore non-optional fields
-``decoder`` and the trailing clauses are ``Optional[Span]`` and are only touched inside ``is not None`` guards,
+``decoder`` and the trailing clauses are ``Optional[Span]``
+and are only touched inside ``is not None`` guards,
 so a static checker can narrow them.
 """
 
@@ -49,7 +49,7 @@ from typing import Generic, List, Optional, Tuple, TypeVar
 import ast
 import textwrap
 
-from lmql_lexer import (tokenize,
+from lmql_lexer import (lex_tokenize,
                         LMQLToken,
                         LMQLTokenType as T,
                         DECODERS,
@@ -69,10 +69,8 @@ class ParseError(SyntaxError):
         self.end = diagnostic.end
 
 
-# ---------------------------------------------------------------------------
-# Result types. Phase 2 produces spans, phase 3 fills in the AST / IR.
-# ---------------------------------------------------------------------------
-
+# Result types. Parsing (Phase 2) after lexing (phase 1) produces spans,
+# phase 3 fills in the AST / IR.
 @dataclass
 class Span:
     start: int
@@ -104,17 +102,18 @@ WhereIR = TypeVar("WhereIR")
 class LMQLQuery(Generic[WhereIR]):
     source: Source
 
-    # always produced (required) ---
+    # always produced (required)
     # source spans:
     prologue: Span
     prompt: Span
-    # leaf parse results (decoder defaults to __dynamic__, from to "<dynamic>",
-    # prompt to []): these are never None on a returned query.
+    # leaf parse results
+    # (decoder defaults to __dynamic__, from to "<dynamic>", prompt to []):
+    # these are never None on a returned query.
     decoder_ast: ast.expr
     prompt_ast: List[ast.stmt]
     from_ast: ast.expr
 
-    # optional: None exactly when the corresponding clause is absent ---
+    # optional: None exactly when the corresponding clause is absent
     decoder: Optional[Span] = None
     from_clause: Optional[Span] = None
     where: Optional[Span] = None
@@ -123,13 +122,14 @@ class LMQLQuery(Generic[WhereIR]):
     distribution_clause: Optional[LMQLDistributionClause] = None
 
 
-# trivia skipped when reasoning about structure (still carried inside spans)
+# trivia skipped when reasoning about structure
+# (but it is still carried inside spans)
 _TRIVIA = (T.NEWLINE, T.COMMENT)
 
 
 class Clause(Enum):
     """
-    The kinds of clause the parser tracks.
+    The different types of clause the parser tracks.
 
     Values match the lexer's keyword text,
     so ``Clause(tok.text)`` resolves a trailing-keyword token to its kind
@@ -156,10 +156,10 @@ class LMQLParser(Generic[WhereIR]):
         self.src = src
         self.source = Source(src)
         # strict=True makes reserved-word collisions (e.g. `beam = 1`) fatal --
-        self.toks: List[LMQLToken] = tokenize(src, strict=True)
+        self.toks: List[LMQLToken] = lex_tokenize(src, strict=True)
         self.eof = self.toks[-1].start                     # == len(src)
 
-    # token helpers ------------------------------------------------------
+    # token helpers
 
     def _next_idx(self, i: int) -> Optional[int]:
         j = i + 1
@@ -195,6 +195,7 @@ class LMQLParser(Generic[WhereIR]):
                   span: Span,
                   message: str,
                   hint: Optional[str] = None) -> ParseError:
+        # TODO Edit fragile error labels, think of better ones
         return ParseError(Diagnostic(message,
                                      span.start,
                                      max(span.start + 1, span.end),
@@ -204,11 +205,12 @@ class LMQLParser(Generic[WhereIR]):
                           self.source
                           )
 
-    # -- boundary discovery -------------------------------------------------
+    # boundary discovery
 
     def _is_decoder_anchor(self, i: int) -> bool:
         t = self.toks[i]
         if not (t.ttype is T.KEYWORD and t.depth == 0 and t.text in DECODERS):
+            # TODO Move this into the Lexer phase. If the lexer already knows the depth, should be better
             return False
         prev = self._prev(i)
         # `obj.argmax` -- attribute access, not the decoder boundary
@@ -271,9 +273,10 @@ class LMQLParser(Generic[WhereIR]):
             return self.toks[self._matching_close(nxt)].end
         return self.toks[i].end
 
-    # -- the parse ----------------------------------------------------------
-
+    # the parse
     def parse(self) -> "LMQLQuery[WhereIR]":
+        # TODO break APART, this is too large, not maintainable
+        # maybe sth like _id_spans(), _validate_order(), and _build_query_obj()
         bounds = self._boundaries()
 
         decoder_b = [b for b in bounds if b[0] is Clause.DECODER]
@@ -286,7 +289,7 @@ class LMQLParser(Generic[WhereIR]):
                             f"{kind.value!r} clause appears before the decoder",
                             hint="order is: decoder? prompt from? where? distribution?")
 
-        # prologue / decoder / prompt start ----
+        # prologue / decoder / prompt start
         decoder_span: Optional[Span]
         if decoder_b:
             di = decoder_b[0][1]
@@ -300,17 +303,18 @@ class LMQLParser(Generic[WhereIR]):
             decoder_span = None
             prompt_start = 0
 
-        # prompt runs until the first trailing boundary (or EOF) ----
+        # prompt runs until the first trailing boundary (or EOF)
         first_trailing = trailing[0][1] if trailing else None
         prompt_end = (self.toks[first_trailing].start
                       if first_trailing is not None else self.eof)
         prompt_span = Span(prompt_start, prompt_end)
 
-        # trailing clauses: validate order + uniqueness, cut spans ----
+        # trailing clauses: validate order + uniqueness, cut spans
         from_span: Optional[Span] = None
         where_span: Optional[Span] = None
         distribution_span: Optional[Span] = None
         last_rank = -1
+        # TODO  use a more functional approach to "consume" expected stuff maybe or a state machine?
         for n, (kind, ti) in enumerate(trailing):
             rank = _TRAILING_ORDER[kind]
             if rank == last_rank:
@@ -322,6 +326,7 @@ class LMQLParser(Generic[WhereIR]):
                     hint="order is: from? where? distribution?")
             last_rank = rank
 
+            # TODO: Offset is weird?? maybe a helper class that abstracts away the start and end calls
             body_start = self.toks[ti].end
             nxt = trailing[n + 1][1] if n + 1 < len(trailing) else None
             body_end = self.toks[nxt].start if nxt is not None else self.eof
@@ -333,9 +338,9 @@ class LMQLParser(Generic[WhereIR]):
             else:
                 distribution_span = span
 
-        # leaf parsing :
-        # compute results before constructing, so
-        # the always-present fields are never None on the returned object ----
+        # leaf parsing:
+        # compute results before constructing,
+        # so the always-present fields are never None on the returned object
         where_ir: Optional[WhereIR] = None
         if where_span is not None and not where_span.is_empty(self.src):
             where_ir = self.parse_where(where_span)
@@ -362,7 +367,7 @@ class LMQLParser(Generic[WhereIR]):
                                             )
         return q
 
-    # leaf dispatch  -------------------------------------------
+    # leaf dispatch
     def _parse_decoder(self, span: Optional[Span]) -> ast.expr:
         # a bare Name (argmax) or a Call (sample(n=2)), default __dynamic__
         if span is not None and not span.is_empty(self.src):
@@ -399,8 +404,11 @@ class LMQLParser(Generic[WhereIR]):
         Whatever this returns becomes the static type of ``LMQLQuery.where_ir``
         for that parser's consumers.
         """
-        raise NotImplementedError("LMQLParser is abstract over its where-IR; use PyExprParser, or "
-                                  "subclass LMQLParser[YourIR] and override parse_where")
+        # TODO Refactor: Inherit from abc.ABC and mark parse_where as an @abstractmethod
+        raise NotImplementedError(
+            "LMQLParser is abstract over its where-IR;"
+            "use PyExprParser, or subclass LMQLParser[YourIR] and override parse_where"
+        )
 
     def _parse_distribution(self, span: Span) -> LMQLDistributionClause:
         node = self._parse_expr(span, Clause.DISTRIBUTION)
@@ -414,17 +422,21 @@ class LMQLParser(Generic[WhereIR]):
             raise self._err_span(span, bad)
         return LMQLDistributionClause(left.id, node.comparators[0])
 
-    # -- expression leaf parsing -------------------------------------------
-
+    # expression leaf parsing
     def _parse_expr(self, span: Span, loc: Clause) -> ast.expr:
         body = span.text(self.src).strip()
         if not body:
             raise self._err_span(span,
                                  f"empty {loc.value} clause")
-        # Parse in eval mode so we get the expression node directly. The parens
-        # let a multi-line clause body read as one logical line, with its own
-        # indentation / trailing comments not mattering.
+        # Parse in eval mode so we get the expression node directly.
+        # The parentheses let a multi-line clause body read as one logical line,
+        # with its own indentation / trailing comments do not matter.
         try:
+            # TODO remove string parsing crap
+            # Pass the raw string to ast.parse
+            # then SyntaxError by checking if the error was caused by a line break
+            # or sth like textwrap.dedent consistently? across all expression parses
+            # this is weird
             return ast.parse("(\n" + body + "\n)", mode="eval").body
         except SyntaxError as e:
             raise self._err_span(span,
@@ -437,8 +449,7 @@ class PyExprParser(LMQLParser[ast.expr]):
     Default parser: the ``where`` clause is parsed as a Python expression.
 
     ``parse(src)`` uses this, so out of the box ``q.where_ir`` is typed
-    ``Optional[ast.expr]`` and consumers can use it as an ``ast.expr`` directly,
-    with no cast or isinstance dance.
+    ``Optional[ast.expr]`` and consumers can use it as an ``ast.expr`` directly.
     """
 
     def parse_where(self, span: Span) -> ast.expr:
